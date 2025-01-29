@@ -1,102 +1,132 @@
 const { SubCategory, SubCategoryTrans, Category } = require("../../../models/index");
-const { HTTP_STATUS_CODE, VALIDATOR } = require("../../../../config/constants");
+const { HTTP_STATUS_CODE, VALIDATOR,uuidv4 } = require("../../../../config/constants");
 const i18n = require("../../../../config/i18n");
-const { uuidv4 } = require("../../../../config/constants");
+const sequelize = require("../../../../config/sequelize");
 const { validationRules } = require("../../../../config/validationRules");
 
 const createSubCategory = async (req, res) => {
   try {
     const { categoryId, translations } = req.body;
-    
-    const validation = new VALIDATOR(req.body, validationRules.TransController);
+    const adminId = req.admin.id;
+
+    const validation = new VALIDATOR(req.body, 
+      { 
+      categoryId: validationRules.SubCategory.categoryId, 
+      translations: validationRules.SubCategory.translations
+    });
     if (validation.fails()) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
         msg: i18n.__("messages.INVALID_INPUT"),
-        data: validation.errors.all(),
-        err: null,
+        data: "",
+        err: validation.errors.all(),
       });
     }
-    
-    // Check if the category exists
-    const category = await Category.findByPk(categoryId);
+
+    const category = await Category.findOne({
+      where: { id: categoryId, isDeleted: false },
+      attributes: ['id'],
+    });
+
     if (!category) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-        msg: i18n.__("Category.CATEGORY_ID_NOT_FOUND"),
+        msg: i18n.__("Category.CATEGORY_NOT_FOUND"),
         data: "",
         err: null,
       });
     }
 
-    for (let translation of translations) {
-      const existingTranslation = await SubCategoryTrans.findOne({
-        where: {
-          lang: translation.lang,
-          name: translation.name
-        }
+    for (let i = 0; i < translations.length; i++) {
+      const query = `
+        SELECT id
+        FROM sub_category_trans
+        WHERE is_deleted = false
+        AND LOWER(lang) = LOWER(:lang)
+        AND LOWER(name) = LOWER(:name)
+      `;
+    
+      const existingTranslation = await sequelize.query(query, {
+        replacements: { 
+          lang: translations[i].lang, 
+          name: translations[i].name 
+        },
+        type: sequelize.QueryTypes.SELECT,
+        raw: true,
       });
-
-      if (existingTranslation) {
+    
+      if (existingTranslation.length > 0) {
         return res.status(HTTP_STATUS_CODE.CONFLICT).json({
           msg: i18n.__("SubCategory.SUBCATEGORY_TRANSLATIONS_EXISTS"),
           data: "",
-          err: null
+          err: null,
         });
       }
-    }
-    // Create the subcategory
+    }      
+
     const newSubCategory = await SubCategory.create({
       id: uuidv4(),
       categoryId,
       isActive: true,
       createdAt: Math.floor(Date.now() / 1000),
+      createdBy: adminId,
     });
 
-    // Create translations for the subcategory
-    const translationPromises = translations.map(async (translation) => {
-      return await SubCategoryTrans.create({
+    const translationsData = [];
+    for (let i = 0; i < translations.length; i++) {
+      translationsData.push({
         id: uuidv4(),
-        name: translation.name,
-        lang: translation.lang,
+        name: translations[i].name,
+        lang: translations[i].lang,
         subcategoryId: newSubCategory.id,
+        createdAt: Math.floor(Date.now() / 1000),
+        createdBy: adminId,
       });
-    });
+    }
 
-    await Promise.all(translationPromises);
+    await SubCategoryTrans.bulkCreate(translationsData);
 
     return res.status(HTTP_STATUS_CODE.CREATED).json({
       msg: i18n.__("SubCategory.SUBCATEGORY_CREATED"),
-      data: { subCategory: newSubCategory, translations },
+      data: { subCategoryId: newSubCategory.id },
       err: null,
     });
   } catch (error) {
     console.error("Error in creating subcategory:", error);
     return res.status(HTTP_STATUS_CODE.SERVER_ERROR).json({
       msg: i18n.__("messages.INTERNAL_ERROR"),
-      data: error.message,
-      err: null,
+      data: "",
+      err: error.message,
     });
   }
 };
+
 
 const getSubCategoryById = async (req, res) => {
   try {
     const { subCategoryId } = req.params;
 
-    // Find subcategory with translations and category
-    const subCategory = await SubCategory.findByPk(subCategoryId, {
-      include: [
-        {
-          model: SubCategoryTrans,
-          as: "translations",
-        },
-        {
-          model: Category,
-          as: "category",
-        },
-      ],
+    const validation = new VALIDATOR(req.params, { subCategoryId: validationRules.SubCategory.subCategoryId });
+    if (validation.fails()) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        msg: i18n.__("messages.INVALID_INPUT"),
+        data: "",
+        err: validation.errors.all(),
+      });
+    }
+
+    const query = `
+      SELECT sc.id, sct.id,sct.name
+      FROM sub_category sc
+      LEFT JOIN sub_category_trans sct ON sct.subcategory_id = sc.id
+      WHERE sc.id = :subCategoryId AND is_deleted = false
+    `;
+
+    const subCategory = await sequelize.query(query, {
+      replacements: { subCategoryId },
+      type: sequelize.QueryTypes.SELECT,
+      raw: true,
     });
 
-    if (!subCategory) {
+    if (!subCategory || subCategory.length === 0) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
         msg: i18n.__("SubCategory.SUBCATEGORY_NOT_FOUND"),
         data: "",
@@ -121,22 +151,23 @@ const getSubCategoryById = async (req, res) => {
 
 const updateSubCategory = async (req, res) => {
   try {
-    const { subCategoryId } = req.params;
-    const { translations } = req.body;
+    const { subCategoryId, translations } = req.body;
+    const adminId = req.admin.id;
 
-    const Validation = new VALIDATOR(req.body, validationRules.TransController);
-    if (Validation.fails()) {
+    const validation = new VALIDATOR(req.body, { subCategoryId: validationRules.SubCategory.subCategoryId, translations: validationRules.SubCategory.translations });
+    if (validation.fails()) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
         msg: i18n.__("messages.INVALID_INPUT"),
-        data: {  
-          Errors:Validation.errors.all(),
-        },
-        err: null,
+        data: "",
+        err: validation.errors.all(),
       });
     }
 
-    // Check if the subcategory exists
-    const subCategory = await SubCategory.findByPk(subCategoryId);
+    const subCategory = await SubCategory.findOne({
+      where: { id: subCategoryId, isDeleted: false },
+      attributes: ['id'],
+    });
+
     if (!subCategory) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
         msg: i18n.__("SubCategory.SUBCATEGORY_NOT_FOUND"),
@@ -145,34 +176,61 @@ const updateSubCategory = async (req, res) => {
       });
     }
 
+    for (let i = 0; i < translations.length; i++) {
+      const query = `
+        SELECT id 
+        FROM sub_category_trans 
+        WHERE is_deleted = false
+        AND subcategory_id != :subCategoryId
+        AND LOWER(lang) = LOWER(:lang)
+        AND LOWER(name) = LOWER(:name)
+      `;
+    
+      const existingTranslation = await sequelize.query(query, {
+        replacements: { 
+          lang: translations[i].lang, 
+          name: translations[i].name, 
+          subCategoryId 
+        },
+        type: sequelize.QueryTypes.SELECT,
+        raw: true,
+      });
+    
+      if (existingTranslation.length > 0) {
+        return res.status(HTTP_STATUS_CODE.CONFLICT).json({
+          msg: i18n.__("SubCategory.SUBCATEGORY_TRANSLATIONS_EXISTS_ASSOCIATED_TO_ANOTHER_SUBCATEGORY"),
+          data: "",
+          err: null,
+        });
+      }
+    }
+    
+    const translationsData = [];
+    for (let i = 0; i < translations.length; i++) {
+      translationsData.push({
+        id: uuidv4(),
+        name: translations[i].name,
+        lang: translations[i].lang,
+        subcategoryId: subCategory.id,
+        createdBy: adminId,
+        createdAt: Math.floor(Date.now() / 1000),
+      });
+    }
+   
     subCategory.updatedAt = Math.floor(Date.now() / 1000);
+    subCategory.updatedBy = adminId;
     await subCategory.save();
 
-    // Update or create translations for the subcategory
-    if (translations && translations.length > 0) {
-      const translationPromises = translations.map(async (translation) => {
-        const existingTranslation = await SubCategoryTrans.findOne({
-          where: { subcategoryId: subCategory.id, lang: translation.lang },
-        });
+    await SubCategoryTrans.update(
+      { isDeleted: true, deletedAt: Math.floor(Date.now() / 1000), deletedBy: adminId },
+      { where: { subcategoryId: subCategoryId, isDeleted: false } }
+    );
 
-        if (existingTranslation) {
-          existingTranslation.name = translation.name;
-          await existingTranslation.save();
-        } else {
-          return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-                      msg: i18n.__("SubCategory.SUBCATEGORY_TRANSLATIONS_NOT_FOUND"),
-                      data: "",
-                      err: null
-                    });
-        }
-      });
-
-      await Promise.all(translationPromises);
-    }
+    await SubCategoryTrans.bulkCreate(translationsData);
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       msg: i18n.__("SubCategory.SUBCATEGORY_UPDATED"),
-      data: { subCategory, translations },
+      data: subCategory,
       err: null,
     });
   } catch (error) {
@@ -188,8 +246,22 @@ const updateSubCategory = async (req, res) => {
 const deleteSubCategory = async (req, res) => {
   try {
     const { subCategoryId } = req.params;
-   
-    const subCategory = await SubCategory.findByPk(subCategoryId);
+    const adminId = req.admin.id;
+
+    const validation = new VALIDATOR(req.params, { subCategoryId: validationRules.SubCategory.subCategoryId });
+    if (validation.fails()) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        msg: i18n.__("messages.INVALID_INPUT"),
+        data: "",
+        err: validation.errors.all(),
+      });
+    }
+
+    const subCategory = await SubCategory.findOne({
+      where: { id: subCategoryId, isDeleted: false },
+      attributes: ['id'],
+    });
+
     if (!subCategory) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
         msg: i18n.__("SubCategory.SUBCATEGORY_NOT_FOUND"),
@@ -198,75 +270,96 @@ const deleteSubCategory = async (req, res) => {
       });
     }
 
-    const accountsWithCategory = await Account.count({
+    const accountsWithSubCategory = await Account.count({
       where: {
         subCategoryId: subCategoryId,
-      }
+        isDeleted: false,
+      },
+      attributes: ['id'],
     });
 
-    if (accountsWithCategory > 0) {
+    if (accountsWithSubCategory > 0) {
       return res.status(HTTP_STATUS_CODE.FORBIDDEN).json({
-        msg: i18n.__("Category.CATEGORY_ASSIGNED_TO_ACCOUNT"),
+        msg: i18n.__("SubCategory.SUBCATEGORY_ASSIGNED_TO_ACCOUNT"),
         data: "",
-        err: null
+        err: null,
       });
     }
 
-    subCategory.isDeleted = true;
-    await subCategory.save();
-
-    
     await SubCategoryTrans.update(
-      { isDeleted: true },
-      { where: { subcategoryId: subCategory.id } }
+      { isDeleted: true, deletedAt: Math.floor(Date.now() / 1000), deletedBy: adminId },
+      { where: { subcategoryId: subCategoryId, isDeleted: false } }
+    );
+
+    await SubCategory.update(
+      { isDeleted: true, deletedAt: Math.floor(Date.now() / 1000), deletedBy: adminId },
+      { where: { id: subCategoryId, isDeleted: false } }
     );
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       msg: i18n.__("SubCategory.SUBCATEGORY_DELETED"),
-      data: "",
+      data: subCategory,
       err: null,
     });
   } catch (error) {
     console.error("Error in deleting subcategory:", error);
     return res.status(HTTP_STATUS_CODE.SERVER_ERROR).json({
       msg: i18n.__("messages.INTERNAL_ERROR"),
-      data: "",
-      err: error.message,
+      data: error.message,
+      err: "",
     });
   }
 };
 
-const getAllSubCategories = async (req, res) => {
+const getAllSubCategory = async (req, res) => {
   try {
-   
-    const subCategories = await SubCategory.findAll({
-      include: [
-        {
-          model: SubCategoryTrans,
-          as: "translations",  
-        },
-        {
-          model: Category,
-          as: "category", 
-        },
-      ],
+    const lang = i18n.getLocale() || 'en';
+    
+    const query = `
+      SELECT sc.id,sct.id, sct.name, sct.lang
+      FROM sub_category sc
+      LEFT JOIN sub_category_trans sct 
+        ON sct.subcategory_id = sc.id 
+        AND sct.lang = :lang
+      WHERE sc.is_deleted = false 
+      GROUP BY sc.id, sct.name, sct.lang
+      ORDER BY sc.createdAt asc
+    `;
+
+    const subcategories = await sequelize.query(query, {
+      replacements: { lang },
+      type: sequelize.QueryTypes.SELECT,
+      raw: true
     });
 
-    if (subCategories.length === 0) {
+    if (!subcategories || subcategories.length === 0) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-        msg: i18n.__("SubCategory.SUBCATEGORIES_NOT_FOUND"),
+        msg: i18n.__("SubCategory.SUBCATEGORY_NOT_FOUND"),
         data: "",
-        err: null,
+        err: null
       });
     }
 
+    const countQuery = `
+      SELECT COUNT(*) as totalSubCategories
+      FROM sub_category sc
+      WHERE sc.is_deleted = false
+    `;
+    const countResult = await sequelize.query(countQuery, {
+      type: sequelize.QueryTypes.SELECT,
+      raw: true
+    });
+
+    const totalSubCategories = countResult[0]?.totalSubCategories || 0;
+
     return res.status(HTTP_STATUS_CODE.OK).json({
-      msg: i18n.__("SubCategory.SUBCATEGORIES_FETCHED"),
-      data: subCategories,
-      err: null,
+      msg: i18n.__("SubCategory.SUBCATEGORY_FETCHED"),
+      data: subcategories,
+      totalSubCategories,
+      err: null
     });
   } catch (error) {
-    console.error("Error in getting all subcategories:", error);
+    console.error("Error in getting subcategories:", error);
     return res.status(HTTP_STATUS_CODE.SERVER_ERROR).json({
       msg: i18n.__("messages.INTERNAL_ERROR"),
       data: error.message,
@@ -275,10 +368,12 @@ const getAllSubCategories = async (req, res) => {
   }
 };
 
+
+
 module.exports = {
   createSubCategory,
   getSubCategoryById,
-  getAllSubCategories,
+  getAllSubCategory,
   updateSubCategory,
-  deleteSubCategory,
+  deleteSubCategory
 };

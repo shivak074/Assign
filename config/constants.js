@@ -16,7 +16,7 @@ const HTTP_STATUS_CODE = {
     SERVER_ERROR: 500,
   };
 
-const Token_expiry = "1h";
+  const TOKEN_EXPIRY = "2h";
 
 module.exports = {
     JWT,

@@ -1,4 +1,4 @@
-const { JWT, uuidv4, VALIDATOR, BCRYPT, Op, HTTP_STATUS_CODE,Token_expiry } = require("../../../../config/constants");
+const { JWT, uuidv4, VALIDATOR, BCRYPT, Op, HTTP_STATUS_CODE,TOKEN_EXPIRY } = require("../../../../config/constants");
 const { User,MstCountry,MstCity } = require("../../../models/index");
 const { generateToken } = require("../../../helper/auth/generateJWTToken");
 const { validationRules } = require("../../../../config/validationRules");
@@ -19,7 +19,7 @@ const SignUp = async (req, res) => {
       });
     }
     const existingUser = await User.findOne({
-      where: { email: { [Op.iLike]: email } },
+      where: { email:  email } ,
       attributes : ["id"]
     });
 
@@ -46,7 +46,7 @@ const SignUp = async (req, res) => {
 
     return res.status(HTTP_STATUS_CODE.CREATED).json({
       msg: i18n.__("User.Auth.USER_CREATED"),
-      data: { id: newUser.id, name: newUser.name,email : newUser.email },
+      data: { id: newUser.id, name: newUser.name },
       err: null,
     });
   } catch (error) {
@@ -76,7 +76,10 @@ const login = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ where: { email: { [Op.iLike]: email } } });
+    const user = await User.findOne({
+       where: { email: email },
+      attributes: ["id", "password"]
+     });
 
     if (!user) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -97,7 +100,7 @@ const login = async (req, res) => {
 
     const token = generateToken(
       { userId: user.id, email: user.email },
-      Token_expiry
+      TOKEN_EXPIRY
     );
 
     return res.status(HTTP_STATUS_CODE.OK).json({
@@ -159,7 +162,7 @@ const updateProfile = async (req, res) => {
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       msg: i18n.__("User.Auth.PROFILE_UPDATED"),
-      data: {updatedData,userId},
+      data: {userId},
       err: null,
     });
   } catch (error) {
@@ -172,50 +175,6 @@ const updateProfile = async (req, res) => {
   }
 };
 
-const getAllUsers = async (req, res) => {
-  try {
-    const query = `
-      SELECT 
-        u.id, 
-        u.name, 
-        u.email, 
-        u.companyName, 
-        u.createdAt, 
-        u.updatedAt,
-        c.id AS cityId,
-        co.id AS countryId
-      FROM 
-        Users u
-      LEFT JOIN 
-        MstCity c ON u.cityId = c.id
-      LEFT JOIN 
-        MstCountry co ON u.countryId = co.id;
-    `;
-
-    const [users, metadata] = await sequelize.query(query);
-
-    if (!users.length) {
-      return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-        msg: "No users found.",
-        data: [],
-        err: null,
-      });
-    }
-
-    return res.status(HTTP_STATUS_CODE.OK).json({
-      msg: "Users fetched successfully.",
-      data: users,
-      err: null,
-    });
-  } catch (error) {
-    console.error("Error in fetching all users:", error);
-    return res.status(HTTP_STATUS_CODE.SERVER_ERROR).json({
-      msg: "Internal server error.",
-      data: null,
-      err: error.message,
-    });
-  }
-};
 
 
 
@@ -223,5 +182,4 @@ module.exports = {
   SignUp,
   login,
   updateProfile,
-  getAllUsers
 };

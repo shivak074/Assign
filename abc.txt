@@ -13,3 +13,98 @@ for checking update route in category
     }
   ]
 }
+
+const { HTTP_STATUS_CODE } = require("../../../../config/constants");
+const i18n = require("../../../../config/i18n");
+const Sequelize = require("../../../../config/sequelize");
+
+const getUsersWithFilters = async (req, res) => {
+  try {
+    const {
+      city,
+      country,
+      search,
+      page = 1,
+      pageSize = 10,
+      sortOrder = "ASC", // Default sort order is ascending
+      sortBy = "createdAt" // Default sort by createdAt
+    } = req.query;
+
+    const offset = (page - 1) * pageSize;
+    const limit = parseInt(pageSize, 10);
+
+    let whereClause = "WHERE u.is_deleted = false";
+
+    if (search) {
+      whereClause += ` AND (u.email ILIKE '%${search}%' OR u.name ILIKE '%${search}%')`;
+    }
+
+    if (city) {
+      whereClause += ` AND u.city_id = :city`;
+    }
+
+    if (country) {
+      whereClause += ` AND u.country_id = :country`;
+    }
+
+
+    const query = `
+      SELECT 
+        u.id, u.name, u.email,
+        COUNT(a.id) AS accountCount, 
+        c.id AS cityId, co.id AS countryId,
+        u.createdAt  -- Include createdAt in the SELECT clause for sorting
+      FROM user u
+      LEFT JOIN mst_city c ON u.city_id = c.id
+      LEFT JOIN mst_country co ON u.country_id = co.id
+      LEFT JOIN Account a ON u.id = a.user_id
+      ${whereClause}
+      GROUP BY u.id, c.id, co.id, u.createdAt -- Include createdAt in GROUP BY
+      ORDER BY ${sortBy} ${sortOrder} -- Use sortBy and sortOrder parameters
+      LIMIT :limit OFFSET :offset;
+    `;
+
+    const users = await Sequelize.query(query, {
+      replacements: {
+        city: city || null,
+        country: country || null,
+        limit: limit,
+        offset: offset,
+      },
+      type: Sequelize.QueryTypes.SELECT,
+    });
+
+    const countQuery = `
+      SELECT COUNT(*) AS totalUsers
+      FROM user u
+      ${whereClause};
+    `;
+
+    const countResult = await Sequelize.query(countQuery, {
+      replacements: {
+        city: city || null,
+        country: country || null
+      },
+      type: Sequelize.QueryTypes.SELECT,
+      raw: true
+    });
+
+    const totalUsers = countResult[0]?.totalUsers || 0;
+
+
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      msg: "Users fetched successfully",
+      data: users,
+      totalUsers: totalUsers, // Include total count in the response
+    });
+  } catch (error) {
+    console.error("Error in fetching users:", error);
+    return res.status(HTTP_STATUS_CODE.SERVER_ERROR).json({
+      msg: "Internal server error",
+      data: error.message,
+      err: "",
+    });
+  }
+};
+
+module.exports = getUsersWithFilters;
